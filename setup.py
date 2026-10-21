@@ -100,6 +100,9 @@ def main():
         "cv2.data": ["*.xml"],
     }
 
+    # Detect if we are cross-compiling for Android
+    is_android = "android" in os.environ.get("CIBW_PLATFORM", "").lower() or "android" in sys.platform.lower()
+
     # Files from CMake output to copy to package.
     # Path regexes with forward slashes relative to CMake install dir.
     rearrange_cmake_output_data = {
@@ -131,7 +134,7 @@ def main():
         [ r"python/cv2/py.typed" ] if sys.version_info >= (3, 6) else []
         ,
         "cv2.data": [  # OPENCV_OTHER_INSTALL_PATH
-            ("etc" if os.name == "nt" else "share/opencv4") + r"/haarcascades/.*\.xml"
+            ("sdk/etc" if os.name == "nt" or is_android else "share/opencv4") + r"/haarcascades/.*.xml"
         ],
         "cv2.gapi": [
             "python/cv2" + r"/gapi/.*\.py"
@@ -153,6 +156,17 @@ def main():
     # Files in sourcetree outside package dir that should be copied to package.
     # Raw paths relative to sourcetree root.
     files_outside_package_dir = {"cv2": ["LICENSE.txt", "LICENSE-3RD-PARTY.txt"]}
+
+    if is_android:
+        try:
+            # Dynamically ask the active environment where it put NumPy's headers
+            import numpy
+            target_numpy_include = numpy.get_include()
+        except ImportError:
+            # Fallback path if it hasn't initialized in the same sub-thread yet
+            import site
+            target_numpy_include = os.path.join(site.getsitepackages()[0], "numpy", "_core", "include")
+
 
     ci_cmake_generator = (
         ["-G", "Visual Studio 17 2022"]
@@ -188,6 +202,12 @@ def main():
             "-DPYTHON3_LIMITED_API=ON",
             "-DBUILD_OPENEXR=ON",
         ]
+        + (
+            [
+                "-DBUILD_ANDROID_PROJECTS=OFF",
+                "-DPYTHON3_NUMPY_INCLUDE_DIRS=%s" % target_numpy_include,
+            ]
+        )
         + (
             # CMake flags for windows/arm64 build
             ["-DCMAKE_GENERATOR_PLATFORM=ARM64",
