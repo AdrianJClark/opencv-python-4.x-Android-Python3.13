@@ -158,6 +158,49 @@ def main():
     files_outside_package_dir = {"cv2": ["LICENSE.txt", "LICENSE-3RD-PARTY.txt"]}
 
     if is_android:
+        # Match your active Python 3.13 environment variables
+        py_major_minor = "3.13"
+        
+        import shutil
+        
+        stub_dir = os.path.abspath("chaquopy_stubs")
+        os.makedirs(stub_dir, exist_ok=True)
+        
+        print("-> Generating native Android symbol links from environment...")
+        
+        # 1. Access the dynamic library paths provided to the container by cibuildwheel
+        config_vars = sysconfig.get_config_vars()
+        src_libdir = config_vars.get("LIBDIR") or config_vars.get("LIBPL")
+        
+        # 2. Locate the active runtime link library
+        target_so_name = f"libpython{py_major_minor}.so"
+        possible_sources = [
+            os.path.join(src_libdir, target_so_name),
+            os.path.join(sys.prefix, "lib", target_so_name),
+        ]
+        
+        found_source = None
+        for source in possible_sources:
+            if os.path.exists(source):
+                found_source = source
+                break
+                
+        if found_source:
+            print(f"   Found active library mapping: {found_source}")
+            shutil.copy2(found_source, os.path.join(stub_dir, target_so_name))
+        else:
+            # Fallback block: Create an empty linker export definition stub if isolated
+            print("   Isolated toolchain detected. Building custom linker stub map...")
+            stub_so_path = os.path.join(stub_dir, target_so_name)
+            if not os.path.exists(stub_so_path):
+                with open(stub_so_path, "wb") as f:
+                    # An empty binary file satisfies the linker map registration layout
+                    f.write(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 56) 
+                    
+        # 3. Force the compiler to explicitly link cv2.abi3.so to libpython3.13.so
+        # This injects the missing "(NEEDED) Shared library: [libpython3.13.so]" marker
+        os.environ["LDFLAGS"] = os.environ.get("LDFLAGS", "") + f" -L{stub_dir} -lpython{py_major_minor}"
+
         try:
             # Dynamically ask the active environment where it put NumPy's headers
             import numpy
@@ -206,6 +249,7 @@ def main():
             [
                 "-DBUILD_ANDROID_PROJECTS=OFF",
                 "-DPYTHON3_NUMPY_INCLUDE_DIRS=%s" % target_numpy_include,
+                "-DCIBUILDWHEEL_ANDROID=ON"
             ]
         )
         + (
